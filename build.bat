@@ -8,6 +8,7 @@ REM CHECK DEPENDENCIES
 echo.
 echo [0/4] Checking required tools...
 
+
 echo Checking Node.js version...
 node -v
 if %errorlevel% neq 0 (
@@ -15,7 +16,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo Checking npm version...
 npm -v
 if %errorlevel% neq 0 (
@@ -23,7 +23,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo Checking Rust (cargo) version...
 cargo --version
 if %errorlevel% neq 0 (
@@ -31,7 +30,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo Checking Tauri CLI version...
 tauri -V
 if %errorlevel% neq 0 (
@@ -39,7 +37,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo Checking MSVC (cl.exe)...
 cl 2>&1 | findstr /I "Microsoft" >nul
 if %errorlevel% neq 0 (
@@ -47,7 +44,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo All dependencies found. Proceeding...
 
 REM CHECK WebView2 Runtime
