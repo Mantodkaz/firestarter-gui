@@ -1,0 +1,17 @@
+{
+  "api_base_url": "https://us-west-00-firestarter.pipenetwork.com",
+  "auth_login": "/auth/login",
+  "auth_refresh": "/auth/refresh",
+  "auth_register": "/users",
+  "auth_reset_password": "/auth/reset-password",
+  "upload": "/priorityUpload",
+  "get_tier_pricing": "/getTierPricing",
+  "download": "/download-stream",
+  "check_wallet": "/checkWallet",
+  "check_custom_token": "/checkCustomToken",
+  "exchange_sol_for_tokens": "/exchangeSolForTokens",
+  "token_usage": "/api/token-usage",
+  "withdraw_sol": "/withdrawSol",
+  "create_public_link": "/createPublicLink",
+  "delete_public_link": "/deletePublicLink"
+}
