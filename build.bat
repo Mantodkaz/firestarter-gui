@@ -8,38 +8,48 @@ echo.
 echo [0/4] Checking required tools...
 
 echo Checking Node.js version...
+
 node -v
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: Node.js is not installed or not in PATH!
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo Checking npm version...
+
 call npm -v
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: npm is not installed or not in PATH!
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo Checking Rust (cargo) version...
+
 cargo --version
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: Rust (cargo) is not installed or not in PATH!
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo Checking Tauri CLI version...
+
 call tauri -V  2>nul
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: Tauri CLI is not installed! Run: npm install -g @tauri-apps/cli
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo Checking MSVC (cl.exe)...
+
 cl 2>&1 | findstr /I "Microsoft" >nul
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: MSVC (cl.exe) not found! Please install Visual Studio Build Tools (Desktop C++).
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo All dependencies found. Proceeding...
@@ -67,18 +77,22 @@ if exist package-lock.json del package-lock.json
 
 echo.
 echo [2/4] Installing dependencies...
+
 call npm install
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: npm install failed!
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo.
 echo [3/4] Building production app...
+
 call npx tauri build
-if errorlevel 1 (
+if %errorlevel% neq 0 (
     echo ERROR: Tauri build failed!
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 
 echo.
