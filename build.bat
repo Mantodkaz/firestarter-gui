@@ -46,10 +46,11 @@ echo All dependencies found. Proceeding...
 
 echo Checking WebView2 Runtime...
 set WEBVIEW2_FOUND=0
+
 reg query "HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients" /s | findstr /I "WebView2" >nul 2>nul && set WEBVIEW2_FOUND=1
 reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients" /s | findstr /I "WebView2" >nul 2>nul && set WEBVIEW2_FOUND=1
 reg query "HKCU\SOFTWARE\Microsoft\EdgeUpdate\Clients" /s | findstr /I "WebView2" >nul 2>nul && set WEBVIEW2_FOUND=1
-if %WEBVIEW2_FOUND%==0 (
+if "!WEBVIEW2_FOUND!"=="0" (
     echo WARNING: WebView2 Runtime not detected in registry!
     echo The app may not run on systems without WebView2.
     echo Download: https://go.microsoft.com/fwlink/p/?LinkId=2124703
