@@ -4,6 +4,7 @@
   "auth_refresh": "/auth/refresh",
   "auth_register": "/users",
   "auth_reset_password": "/auth/reset-password",
+  "auth_set_password": "/auth/set-password",
   "upload": "/priorityUpload",
   "get_tier_pricing": "/getTierPricing",
   "download": "/download-stream",

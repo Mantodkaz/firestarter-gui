@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface AuthTokens {
   access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;
-  expires_at?: string; // ISO string format
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  expires_at?: string;
   csrf_token?: string;
 }
 
@@ -25,106 +25,86 @@ interface UserLoginProps {
 }
 
 export const UserLogin: React.FC<UserLoginProps> = ({ onSuccess, onCancel, existingCredentials, importMessage }) => {
-  const [username, setUsername] = useState(existingCredentials?.username || '');
+  const [username, setUsername] = useState(existingCredentials?.username ?? '');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string>('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const canSubmit = useMemo(() => username.trim().length > 0 && password.trim().length > 0 && !isLoading, [username, password, isLoading]);
+
+  const resolveBaseCredentials = useCallback(async (uname: string): Promise<SavedCredentials | null> => {
+    if (existingCredentials) return existingCredentials;
+    try {
+      const saved = await invoke<SavedCredentials[]>('list_saved_users');
+      const found = saved.find((u) => u.username?.toLowerCase() === uname.toLowerCase());
+      return found ?? null;
+    } catch (e) {
+      console.error('[Login] list_saved_users failed');
+      return null;
+    }
+  }, [existingCredentials]);
+
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!username.trim() || !password.trim()) {
+    const uname = username.trim();
+    const pwd = password; // keep exact
+
+    if (!uname || !pwd) {
       setError('Username and password are required');
       return;
     }
 
     setIsLoading(true);
     setError('');
-
     try {
-      const authTokensJson = await invoke<string>('user_login', {
-        username: username.trim(),
-        password: password,
-      });
-
-      console.log('✅ Login successful');
-
-      // Parse the JSON response
-      const authTokens: AuthTokens = JSON.parse(authTokensJson);
-
-      // Create credentials with JWT tokens
-      let credentials: SavedCredentials;
-      
-      if (existingCredentials) {
-        // Update existing credentials with new tokens
-        credentials = {
-          ...existingCredentials,
-          auth_tokens: authTokens,
-          username: username.trim(),
-        };
-      } else {
-        // For fresh login without existing credentials, need to load 
-        // user's saved credentials by username first
-        try {
-          const savedUsers = await invoke<SavedCredentials[]>('list_saved_users');
-          const existingUser = savedUsers.find(user => 
-            user.username?.toLowerCase() === username.trim().toLowerCase()
-          );
-          
-          if (existingUser) {
-            // Update existing user with new JWT tokens
-            credentials = {
-              ...existingUser,
-              auth_tokens: authTokens,
-              username: username.trim(),
-            };
-          } else {
-            // No local credentials found, user needs to register or import first
-            setError(`No local account found for "${username}". Please register a new account or import your existing credentials first.`);
-            return;
-          }
-        } catch (listError) {
-          console.error('❌ Failed to list saved users:', listError);
-          setError('Failed to access local user data. Please try again or import your credentials.');
-          return;
-        }
+      // Ask backend to log in and return JWT tokens as JSON string
+      const tokenJson = await invoke<string>('user_login', { username: uname, password: pwd });
+      let tokens: AuthTokens | null = null;
+      try {
+        tokens = JSON.parse(tokenJson) as AuthTokens;
+      } catch {
+        throw new Error('Invalid token payload from backend');
       }
 
-      // Save updated credentials
-      await invoke('save_credentials', { credentials });
-      console.log('✅ Credentials updated with JWT tokens');
-      
-      onSuccess(credentials);
-    } catch (err) {
-      console.error('❌ Login error:', err);
-      const errorMessage = err as string;
-      
-      if (errorMessage.includes('locked')) {
-        setError('Account is locked due to too many failed attempts. Please contact support.');
-      } else if (errorMessage.includes('Too many')) {
-        setError('Too many login attempts. Please try again later.');
-      } else {
-        setError(`Login failed: ${errorMessage}`);
+      // Find base credentials (user_id, app_key)
+      const base = await resolveBaseCredentials(uname);
+      if (!base) {
+        setError(`No local account found for "${uname}". Please register or import credentials first.`);
+        return;
       }
+
+      const merged: SavedCredentials = { ...base, username: uname, auth_tokens: tokens };
+
+      // Persist
+      await invoke('save_credentials', { credentials: merged });
+      onSuccess(merged);
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || String(err);
+      // Normalize a few common cases without leaking backend text
+      if (/locked/i.test(msg)) setError('Account locked due to too many attempts. Try later or contact support.');
+      else if (/too many/i.test(msg)) setError('Too many login attempts. Please wait a moment and try again.');
+      else setError(`Login failed: ${msg}`);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [username, password, onSuccess, resolveBaseCredentials]);
 
   return (
     <div className="max-w-md mx-auto">
       <div className="card">
         <h2>Login</h2>
-        
+
         {importMessage && (
-          <div style={{ 
-            padding: '0.75rem', 
-            borderRadius: '4px', 
-            marginBottom: '1rem',
-            background: '#d4edda',
-            color: '#155724',
-            border: '1px solid #c3e6cb'
-          }}>
+          <div
+            style={{
+              padding: '0.75rem',
+              borderRadius: 4,
+              marginBottom: '1rem',
+              background: '#d4edda',
+              color: '#155724',
+              border: '1px solid #c3e6cb',
+            }}
+          >
             {importMessage}
           </div>
         )}
@@ -136,8 +116,9 @@ export const UserLogin: React.FC<UserLoginProps> = ({ onSuccess, onCancel, exist
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder={existingCredentials?.username ? `Login as: ${existingCredentials.username}` : "Enter your username"}
+              placeholder={existingCredentials?.username ? `Login as: ${existingCredentials.username}` : 'Enter your username'}
               disabled={isLoading}
+              autoComplete="username"
             />
           </div>
 
@@ -149,31 +130,19 @@ export const UserLogin: React.FC<UserLoginProps> = ({ onSuccess, onCancel, exist
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
               disabled={isLoading}
+              autoComplete="current-password"
             />
           </div>
 
           {error && (
-            <div style={{ color: '#ff6b6b', fontSize: '0.875rem', marginBottom: '1rem' }}>
-              {error}
-            </div>
+            <div style={{ color: '#ff6b6b', fontSize: '0.875rem', marginBottom: '1rem' }}>{error}</div>
           )}
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="button"
-              style={{ flex: 1 }}
-              disabled={isLoading}
-            >
+            <button type="button" onClick={onCancel} className="button" style={{ flex: 1 }} disabled={isLoading}>
               Cancel
             </button>
-            <button
-              type="submit"
-              className="button"
-              style={{ flex: 1 }}
-              disabled={isLoading || !username.trim() || !password.trim()}
-            >
+            <button type="submit" className="button" style={{ flex: 1 }} disabled={!canSubmit}>
               {isLoading ? 'Logging in...' : 'Login'}
             </button>
           </div>

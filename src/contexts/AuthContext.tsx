@@ -1,16 +1,16 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface AuthTokens {
   access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;
-  expires_at?: string; // ISO string format
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number; // seconds
+  expires_at?: string; // ISO
   csrf_token?: string;
 }
 
-interface SavedCredentials {
+export interface SavedCredentials {
   user_id: string;
   user_app_key: string;
   auth_tokens?: AuthTokens;
@@ -35,177 +35,148 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
 };
 
-interface AuthProviderProps {
-  children: React.ReactNode;
-}
+interface AuthProviderProps { children: React.ReactNode }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [credentials, setCredentials] = useState<SavedCredentials | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const isAuthenticated = credentials !== null;
-  const hasJWT = credentials?.auth_tokens !== undefined;
+
+  const isAuthenticated = !!credentials;
+  const hasJWT = !!credentials?.auth_tokens;
+
   const loadCredentials = useCallback(async () => {
     setIsLoading(true);
     try {
-      // try load credentials
-      const loaded = await invoke('load_credentials');
+      const loaded = await invoke<SavedCredentials | null>('load_credentials');
       if (loaded && typeof loaded === 'object' && 'user_id' in loaded) {
-        setCredentials(loaded as SavedCredentials);
-        console.log('✅ Credentials loaded from file:', loaded.user_id);
+        setCredentials(loaded);
+        console.log('✅ Credentials loaded:', loaded.user_id);
       } else {
         setCredentials(null);
-        console.log('⚠️ No credentials found in file');
+        console.log('ℹ️ No credentials found');
       }
-    } catch (error) {
-      console.error('Failed to load credentials:', error);
+    } catch (err) {
+      console.error('Failed to load credentials:', err);
       setCredentials(null);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const updateCredentials = useCallback(async (newCredentials: SavedCredentials) => {
-    try {
-      await invoke('save_credentials', { credentials: newCredentials });
-      setCredentials(newCredentials);
-      console.log('✅ Credentials updated and saved');
-    } catch (error) {
-      console.error('❌ Failed to save credentials:', error);
-      throw error;
-    }
+  const persistCredentials = useCallback(async (next: SavedCredentials) => {
+    await invoke('save_credentials', { credentials: next });
+    setCredentials(next);
   }, []);
 
-  const login = useCallback(async (newCredentials: SavedCredentials) => {
+  const updateCredentials = useCallback(async (next: SavedCredentials) => {
     try {
-      await invoke('save_credentials', { credentials: newCredentials });
-      setCredentials(newCredentials);
-      console.log('✅ User logged in and saved:', {
-        user_id: newCredentials.user_id.substring(0, 8) + '...',
-        username: newCredentials.username,
-        hasJWT: !!newCredentials.auth_tokens,
-      });
-    } catch (error) {
-      console.error('❌ Failed to save credentials during login:', error);
-      throw error;
+      await persistCredentials(next);
+      console.log('✅ Credentials updated');
+    } catch (err) {
+      console.error('❌ Failed to update credentials:', err);
+      throw err;
     }
-  }, []);
+  }, [persistCredentials]);
+
+  const login = useCallback(async (next: SavedCredentials) => {
+    try {
+      await persistCredentials(next);
+      console.log('✅ Logged in:', {
+        user_id: next.user_id.slice(0, 8) + '...',
+        username: next.username,
+        hasJWT: !!next.auth_tokens,
+      });
+    } catch (err) {
+      console.error('❌ Failed to save credentials during login:', err);
+      throw err;
+    }
+  }, [persistCredentials]);
 
   const logout = useCallback(() => {
     setCredentials(null);
-    console.log('✅ User logged out (credentials remain saved)');
+    console.log('✅ Logged out (local state cleared)');
   }, []);
 
   const deleteAccountData = useCallback(async (userId: string) => {
     try {
-      await invoke('clear_credentials', { userId });
-      if (credentials?.user_id === userId) {
-        setCredentials(null);
-      }
-      console.log('✅ Account data deleted for user:', userId);
-    } catch (error) {
-      console.error('❌ Failed to delete account data:', error);
-      throw error;
+      await invoke('clear_credentials', { user_id: userId });
+      if (credentials?.user_id === userId) setCredentials(null);
+      console.log('✅ Account data deleted for:', userId);
+    } catch (err) {
+      console.error('❌ Failed to delete account data:', err);
+      throw err;
     }
   }, [credentials]);
 
   const listSavedUsers = useCallback(async (): Promise<SavedCredentials[]> => {
     try {
       const users = await invoke<SavedCredentials[]>('list_saved_users');
-      return users;
-    } catch (error) {
-      console.error('❌ Failed to list saved users:', error);
+      return Array.isArray(users) ? users : [];
+    } catch (err) {
+      console.error('❌ Failed to list saved users:', err);
       return [];
     }
   }, []);
 
-  const getUserApiConfig = useCallback(async (userId: string): Promise<any> => {
+  const getUserApiConfig = useCallback(async () => {
     try {
-      const config = await invoke('get_user_api_config', { userId });
-      return config;
-    } catch (error) {
-      console.error('❌ Failed to get user API config:', error);
+      return await invoke('get_api_config');
+    } catch {
       return null;
     }
   }, []);
 
-  // Auto-refresh JWT credentials (bug fixes)
+  // --- refresh loop ----------------------------------------------------
+  const msUntilExpiry = useCallback((creds: SavedCredentials | null) => {
+    const iso = creds?.auth_tokens?.expires_at;
+    if (!iso) return Number.POSITIVE_INFINITY;
+    const exp = Date.parse(iso);
+    return exp - Date.now();
+  }, []);
+
   useEffect(() => {
-    if (!credentials?.auth_tokens?.access_token || !credentials?.auth_tokens?.expires_at) return;
+    // check every 30s refresh if < 2 minutes remaining
     const interval = setInterval(async () => {
       try {
-        const expiresAt = Date.parse(credentials.auth_tokens!.expires_at!);
-        const now = Date.now();
-        // 2 minutes
-        if (expiresAt - now < 2 * 60 * 1000) {
+        if (!credentials?.auth_tokens?.access_token) return;
+        const msLeft = msUntilExpiry(credentials);
+        if (msLeft <= 2 * 60 * 1000) {
           await invoke('refresh_token');
-          let loaded = false;
-          let retries = 0;
-          let lastCreds: any = null;
-          while (!loaded && retries < 5) {
-            await new Promise(res => setTimeout(res, 200 + 200 * retries));
-            await loadCredentials();
-            lastCreds = await invoke('load_credentials');
-            // Type guard: check if lastCreds is an object and has auth_tokens
-            if (
-              lastCreds &&
-              typeof lastCreds === 'object' &&
-              'auth_tokens' in lastCreds &&
-              lastCreds.auth_tokens &&
-              typeof lastCreds.auth_tokens === 'object' &&
-              'access_token' in lastCreds.auth_tokens &&
-              lastCreds.auth_tokens.access_token
-            ) {
-              loaded = true;
-              break;
-            }
-            retries++;
-          }
-          if (loaded) {
-            console.log(`[Auth] Token auto-refreshed and credentials loaded (retry ${retries})`);
-          } else {
-            console.warn('[Auth] Token refreshed but failed to load credentials after retry');
-          }
+          await loadCredentials();
+          console.log('[Auth] token refreshed via background loop');
         }
-      } catch (e) {
-        console.warn('[Auth] Auto-refresh token failed:', e);
+      } catch (err) {
+        console.warn('[Auth] background refresh failed:', err);
       }
-    }, 30 * 1000); // check every 30 seconds
+    }, 30_000);
     return () => clearInterval(interval);
-  }, [credentials?.auth_tokens?.access_token, credentials?.auth_tokens?.expires_at, loadCredentials]);
+  }, [credentials?.auth_tokens?.access_token, msUntilExpiry, loadCredentials]);
 
-  // Get valid access token
-  const getValidAccessToken = React.useCallback(async (): Promise<string | null> => {
-    if (!credentials?.auth_tokens?.access_token) return null;
-    const expiresAtStr = credentials.auth_tokens.expires_at;
-    if (!expiresAtStr) return credentials.auth_tokens.access_token;
-    const expiresAt = Date.parse(expiresAtStr);
-    const now = Date.now();
-    if (expiresAt - now < 2 * 60 * 1000) {
-      try {
-        await invoke('refresh_token');
-        await loadCredentials();
-        const users = await invoke<SavedCredentials[]>('list_saved_users');
-        const currentUser = users.find(u => u.user_id === credentials?.user_id);
-        if (currentUser?.auth_tokens?.access_token) {
-          return currentUser.auth_tokens.access_token;
-        } else {
-          return null;
-        }
-      } catch {
-        return null;
-      }
+  // --- get a valid (fresh) access token ----------------------------
+  const getValidAccessToken = useCallback(async (): Promise<string | null> => {
+    const current = credentials?.auth_tokens?.access_token ?? null;
+    if (!current) return null;
+
+    const msLeft = msUntilExpiry(credentials);
+    if (msLeft > 2 * 60 * 1000) return current; // good enough
+
+    try {
+      await invoke('refresh_token');
+      await loadCredentials();
+      const users = await invoke<SavedCredentials[]>('list_saved_users');
+      const me = users.find((u) => u.user_id === credentials?.user_id);
+      return me?.auth_tokens?.access_token ?? null;
+    } catch (err) {
+      return null;
     }
-    return credentials.auth_tokens.access_token;
-  }, [credentials, loadCredentials]);
+  }, [credentials, msUntilExpiry, loadCredentials]);
 
-  const value: AuthContextType = {
+  const value = useMemo<AuthContextType>(() => ({
     credentials,
     isLoading,
     isAuthenticated,
@@ -218,7 +189,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     listSavedUsers,
     getUserApiConfig,
     getValidAccessToken,
-  };
+  }), [
+    credentials,
+    isLoading,
+    isAuthenticated,
+    hasJWT,
+    login,
+    logout,
+    loadCredentials,
+    updateCredentials,
+    deleteAccountData,
+    listSavedUsers,
+    getUserApiConfig,
+    getValidAccessToken,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

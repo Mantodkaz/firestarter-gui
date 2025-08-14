@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuth } from '../contexts/AuthContext';
 import { useDownloadSelection } from '../contexts/DownloadSelectionContext';
@@ -10,7 +10,7 @@ interface UploadLogEntry {
   message: string;
   blake3_hash: string;
   file_size: number;
-  timestamp: string; // ISO format
+  timestamp: string; // ISO
 }
 
 interface ListProps {
@@ -22,8 +22,8 @@ interface ListProps {
 type SortCol = 'local_path' | 'remote_path' | 'file_size' | 'status' | 'timestamp';
 type SortDir = 'asc' | 'desc';
 
-// helpers
-function getStatusColor(status: string): string {
+// ----- helpers ---------------------------------------------------------------
+const statusColor = (status: string): string => {
   switch ((status || '').toLowerCase()) {
     case 'success':
     case 'sukses':
@@ -40,42 +40,44 @@ function getStatusColor(status: string): string {
     default:
       return '#fff';
   }
-}
+};
 
-function formatBytes(bytes: number): string {
+const fmtBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
   let i = -1;
-  let value = bytes;
+  let v = bytes;
   do {
-    value = value / 1024;
+    v /= 1024;
     i++;
-  } while (value >= 1024 && i < units.length - 1);
-  return `${value.toFixed(value < 10 ? 2 : 1)} ${units[i]}`;
-}
+  } while (v >= 1024 && i < units.length - 1);
+  return `${v.toFixed(v < 10 ? 2 : 1)} ${units[i]}`;
+};
 
-function formatDate(ts: string): string {
+const timeKey = (ts: string): number => {
+  const t = Date.parse(ts);
+  return Number.isNaN(t) ? 0 : t;
+};
+
+const fmtDateMultiline = (ts: string): string => {
   const t = Date.parse(ts);
   if (Number.isNaN(t)) return ts;
   const d = new Date(t);
-  const dateStr = d.toLocaleDateString();
-  const timeStr = d.toLocaleTimeString();
-  return `${dateStr}\n${timeStr}`;
-}
+  return `${d.toLocaleDateString()}\n${d.toLocaleTimeString()}`;
+};
 
-function timeKey(ts: string): number {
-  const t = Date.parse(ts);
-  return Number.isNaN(t) ? 0 : t;
-}
+const shortHash = (hash: string): string => {
+  if (!hash) return '';
+  return hash.length <= 16 ? hash : `${hash.slice(0, 8)}...${hash.slice(-4)}`;
+};
 
+// ----- component -------------------------------------------------------------
 export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
   const { credentials } = useAuth();
   const { setSelection } = useDownloadSelection();
 
-  // search box SELALU tampil
   const [search, setSearch] = useState('');
-
   const [entries, setEntries] = useState<UploadLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -84,40 +86,42 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
   const [highlightedKeys, setHighlightedKeys] = useState<string[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // fetch history
   useEffect(() => {
     if (!credentials?.user_id) return;
 
-    let mounted = true;
+    let alive = true;
     setLoading(true);
     setError('');
 
     invoke<UploadLogEntry[]>('get_upload_history', { userId: credentials.user_id })
       .then((res) => {
-        if (!mounted) return;
+        if (!alive) return;
         const newEntries = Array.isArray(res) ? res : [];
 
+        // highlight newly added rows
         if (entries.length > 0 && newEntries.length > entries.length) {
           const oldKeys = new Set(entries.map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`));
-          const newKeys = newEntries.map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`);
-          const diffKeys = newKeys.filter((k) => !oldKeys.has(k));
-          if (diffKeys.length > 0) {
-            setHighlightedKeys(diffKeys);
-            setTimeout(() => setHighlightedKeys([]), 1800);
+          const diff = newEntries
+            .map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`)
+            .filter((k) => !oldKeys.has(k));
+          if (diff.length) {
+            setHighlightedKeys(diff);
+            setTimeout(() => setHighlightedKeys([]), 1500);
           }
         }
         setEntries(newEntries);
       })
       .catch((e) => {
-        if (!mounted) return;
+        if (!alive) return;
         setError(e?.toString?.() ?? 'Failed to load history');
       })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
+      .finally(() => alive && setLoading(false));
 
     return () => {
-      mounted = false;
+      alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credentials?.user_id, refreshKey]);
 
   const filteredEntries = useMemo(() => {
@@ -130,45 +134,46 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
         (e.blake3_hash && e.blake3_hash.toLowerCase().includes(q))
       );
     }
-    arr = [...arr];
-    arr.sort((a, b) => {
-      let vA: number | string;
-      let vB: number | string;
+
+    const sorted = [...arr].sort((a, b) => {
+      let A: number | string;
+      let B: number | string;
       switch (sortBy) {
         case 'local_path':
-          vA = a.local_path.toLowerCase();
-          vB = b.local_path.toLowerCase();
+          A = a.local_path.toLowerCase();
+          B = b.local_path.toLowerCase();
           break;
         case 'remote_path':
-          vA = a.remote_path.toLowerCase();
-          vB = b.remote_path.toLowerCase();
+          A = a.remote_path.toLowerCase();
+          B = b.remote_path.toLowerCase();
           break;
         case 'file_size':
-          vA = a.file_size || 0;
-          vB = b.file_size || 0;
+          A = a.file_size || 0;
+          B = b.file_size || 0;
           break;
         case 'status':
-          vA = (a.status || '').toLowerCase();
-          vB = (b.status || '').toLowerCase();
+          A = (a.status || '').toLowerCase();
+          B = (b.status || '').toLowerCase();
           break;
         case 'timestamp':
         default:
-          vA = timeKey(a.timestamp);
-          vB = timeKey(b.timestamp);
+          A = timeKey(a.timestamp);
+          B = timeKey(b.timestamp);
           break;
       }
-      if (vA < vB) return sortDir === 'asc' ? -1 : 1;
-      if (vA > vB) return sortDir === 'asc' ? 1 : -1;
+      if (A < B) return sortDir === 'asc' ? -1 : 1;
+      if (A > B) return sortDir === 'asc' ? 1 : -1;
       return 0;
     });
-    return arr;
-  }, [entries, sortBy, sortDir, search]);
+
+    return sorted;
+  }, [entries, search, sortBy, sortDir]);
 
   const handleSort = useCallback((col: SortCol) => {
-    setSortBy((current) => {
-      if (current === col) {
+    setSortBy((cur) => {
+      if (cur === col) {
         setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-        return current;
+        return cur;
       }
       setSortDir(col === 'timestamp' ? 'desc' : 'asc');
       return col;
@@ -176,29 +181,17 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
   }, []);
 
   const sortIcon = useCallback(
-    (col: SortCol) => {
-      if (sortBy !== col) return null;
-      return sortDir === 'asc' ? ' ▲' : ' ▼';
-    },
+    (col: SortCol) => (sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : null),
     [sortBy, sortDir]
   );
 
   const onRowClick = useCallback(
     (remotePath: string, fileName: string) => {
-      if (onRemoteFileClick) {
-        onRemoteFileClick(remotePath);
-      } else {
-        setSelection({ remotePath, fileName });
-      }
+      if (onRemoteFileClick) onRemoteFileClick(remotePath);
+      else setSelection({ remotePath, fileName });
     },
-    [setSelection, onRemoteFileClick]
+    [onRemoteFileClick, setSelection]
   );
-
-  function shortHash(hash: string): string {
-    if (!hash) return '';
-    if (hash.length <= 16) return hash;
-    return hash.slice(0, 8) + '...' + hash.slice(-4);
-  }
 
   const hasAnyData = entries.length > 0;
   const noResult = hasAnyData && filteredEntries.length === 0 && search.trim().length > 0;
@@ -218,7 +211,7 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
     >
       <h2 style={{ marginBottom: 12 }}>Upload History</h2>
 
-      {/* Search SELALU nampak (kecuali sedang loading parah, tapi tetap kita tampilkan) */}
+      {/* Search */}
       <div style={{ marginBottom: 8 }}>
         <input
           type="text"
@@ -279,9 +272,7 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
                 >
                   Remote Path{sortIcon('remote_path')}
                 </th>
-                <th
-                  style={{ padding: '4px 3px', textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0, zIndex: 1, background: '#232323' }}
-                >
+                <th style={{ padding: '4px 3px', textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0, zIndex: 1, background: '#232323' }}>
                   Hash
                 </th>
                 <th
@@ -308,45 +299,37 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
               {filteredEntries.map((entry, idx) => {
                 const key = `${entry.blake3_hash || ''}-${timeKey(entry.timestamp) || idx}`;
                 const fname = entry.local_path?.split(/[/\\]/).pop() || entry.local_path || '';
-                const isHighlighted = highlightedKeys.includes(key);
+                const isHi = highlightedKeys.includes(key);
+
                 return (
                   <tr
                     key={key}
                     style={{
-                      background: isHighlighted
-                        ? 'linear-gradient(90deg, #facc15 0%, #fffbe6 100%)'
-                        : idx % 2 === 0
-                        ? '#191919'
-                        : '#222',
-                      color: isHighlighted ? '#222' : '#eee',
+                      background: isHi ? 'linear-gradient(90deg, #facc15 0%, #fffbe6 100%)' : idx % 2 === 0 ? '#191919' : '#222',
+                      color: isHi ? '#222' : '#eee',
                       transition: 'background 0.7s, color 0.7s',
                     }}
                   >
                     <td style={{ padding: '4px 3px' }} title={entry.local_path}>
                       {fname}
                     </td>
+
                     <td
-                      style={{
-                        padding: '4px 3px',
-                        cursor: 'pointer',
-                        wordBreak: 'break-all',
-                        whiteSpace: 'normal',
-                        color: '#eee',
-                        transition: 'color 0.2s, text-decoration 0.2s',
-                      }}
+                      style={{ padding: '4px 3px', cursor: 'pointer', wordBreak: 'break-all', whiteSpace: 'normal', color: '#eee', transition: 'color 0.2s, textDecoration 0.2s' as any }}
                       title={entry.remote_path}
                       onClick={() => onRowClick(entry.remote_path, fname)}
                       onMouseOver={(e) => {
-                        (e.currentTarget as HTMLElement).style.textDecoration = 'underline';
-                        (e.currentTarget as HTMLElement).style.color = '#4faaff';
+                        e.currentTarget.style.textDecoration = 'underline';
+                        e.currentTarget.style.color = '#4faaff';
                       }}
                       onMouseOut={(e) => {
-                        (e.currentTarget as HTMLElement).style.textDecoration = 'none';
-                        (e.currentTarget as HTMLElement).style.color = '#eee';
+                        e.currentTarget.style.textDecoration = 'none';
+                        e.currentTarget.style.color = '#eee';
                       }}
                     >
                       {entry.remote_path}
                     </td>
+
                     <td
                       style={{
                         padding: '4px 3px',
@@ -367,7 +350,9 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
                           await navigator.clipboard.writeText(entry.blake3_hash);
                           setCopiedKey(key);
                           setTimeout(() => setCopiedKey(null), 1200);
-                        } catch {}
+                        } catch {
+                          // ignore
+                        }
                       }}
                     >
                       {shortHash(entry.blake3_hash)}
@@ -392,20 +377,14 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
                         Copied!
                       </span>
                     </td>
-                    <td style={{ padding: '4px 3px', textAlign: 'right' }}>
-                      {formatBytes(entry.file_size)}
-                    </td>
-                    <td
-                      style={{
-                        padding: '4px 3px',
-                        fontWeight: 600,
-                        color: getStatusColor(entry.status),
-                        textTransform: 'capitalize',
-                      }}
-                    >
+
+                    <td style={{ padding: '4px 3px', textAlign: 'right' }}>{fmtBytes(entry.file_size)}</td>
+
+                    <td style={{ padding: '4px 3px', fontWeight: 600, color: statusColor(entry.status), textTransform: 'capitalize' }}>
                       {entry.status || '-'}
                     </td>
-                    <td style={{ padding: '4px 3px', whiteSpace: 'pre-line' }}>{formatDate(entry.timestamp)}</td>
+
+                    <td style={{ padding: '4px 3px', whiteSpace: 'pre-line' }}>{fmtDateMultiline(entry.timestamp)}</td>
                   </tr>
                 );
               })}

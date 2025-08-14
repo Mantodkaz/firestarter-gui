@@ -1,11 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import apiEndpoints from '../api_endpoints.json';
+import { ep } from '../shared/api/endpoints';
 
 interface SavedCredentials {
   user_id: string;
   user_app_key: string;
-  auth_tokens?: any;
+  auth_tokens?: {
+    access_token: string;
+    refresh_token?: string;
+    token_type?: string;
+    expires_in?: number; // seconds
+    expires_at?: string; // ISO string
+  };
   username?: string;
 }
 
@@ -15,94 +21,96 @@ interface UserSelectorProps {
   onLoginRequired: (credentials: SavedCredentials) => void;
 }
 
-export const UserSelector: React.FC<UserSelectorProps> = ({ 
-  onUserSelect, 
-  onCancel, 
-  onLoginRequired 
-}) => {
-//  const { listSavedUsers, getUserApiConfig } = useAuth();
+export const UserSelector: React.FC<UserSelectorProps> = ({ onUserSelect, onCancel, onLoginRequired }) => {
   const { listSavedUsers } = useAuth();
+
   const [users, setUsers] = useState<SavedCredentials[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const performFreshLogin = async (user: SavedCredentials) => {
-    setIsAuthenticating(user.user_id);
-    
+  // memoize refresh endpoint
+  const refreshUrl = useMemo(() => ep('auth_refresh'), []);
+
+  const loadUsers = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
     try {
-      // First try to refresh token if available
-      if (user.auth_tokens?.refresh_token) {
-        try {
-          console.log('Attempting to refresh token for user:', user.username);
-          const refreshResponse = await fetch(`${apiEndpoints.api_base_url}${apiEndpoints.auth_refresh}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              refresh_token: user.auth_tokens.refresh_token
-            })
-          });
-
-          if (refreshResponse.ok) {
-            const refreshData = await refreshResponse.json();
-            
-            // Update auth tokens with new access token
-            const updatedCredentials = {
-              ...user,
-              auth_tokens: {
-                ...user.auth_tokens,
-                access_token: refreshData.access_token,
-                expires_in: refreshData.expires_in,
-                token_type: refreshData.token_type,
-                expires_at: new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
-              }
-            };
-
-            console.log('✅ Token refreshed successfully for user:', user.username);
-            onUserSelect(updatedCredentials);
-            return;
-          } else {
-            console.warn('Token refresh failed, response:', refreshResponse.status);
-          }
-        } catch (error) {
-          console.warn('Token refresh failed with error:', error);
-        }
-      }
-
-      // If refresh failed or no refresh token, require manual login
-      console.log('🔐 Fresh login required for user:', user.username || user.user_id);
-      onLoginRequired(user);
-
-    } catch (error) {
-      console.error('Authentication error:', error);
-      onLoginRequired(user);
+      const saved = await listSavedUsers();
+      setUsers(Array.isArray(saved) ? saved : []);
+    } catch (e) {
+      console.error('Failed to load saved users:', e);
+      setError('Failed to load saved accounts');
     } finally {
-      setIsAuthenticating(null);
+      setIsLoading(false);
     }
-  };
+  }, [listSavedUsers]);
 
   useEffect(() => {
-    const loadUsers = async () => {
-      try {
-        const savedUsers = await listSavedUsers();
-        setUsers(savedUsers);
-      } catch (error) {
-        console.error('Failed to load saved users:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    void loadUsers();
+  }, [loadUsers]);
 
-    loadUsers();
-  }, [listSavedUsers]);
+  const tryRefresh = useCallback(
+    async (user: SavedCredentials): Promise<SavedCredentials | null> => {
+      if (!user.auth_tokens?.refresh_token) return null;
+      try {
+        const res = await fetch(refreshUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: user.auth_tokens.refresh_token }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const expiresIn: number | undefined = data?.expires_in;
+        const next: SavedCredentials = {
+          ...user,
+          auth_tokens: {
+            ...user.auth_tokens,
+            access_token: data.access_token,
+            token_type: data.token_type ?? user.auth_tokens.token_type,
+            expires_in: expiresIn,
+            expires_at: typeof expiresIn === 'number' ? new Date(Date.now() + expiresIn * 1000).toISOString() : user.auth_tokens.expires_at,
+            refresh_token: user.auth_tokens.refresh_token, // keep existing refresh token unless API returns a new one
+          },
+        };
+        return next;
+      } catch (e) {
+        console.warn('Token refresh failed:', e);
+        return null;
+      }
+    },
+    [refreshUrl]
+  );
+
+  const performFreshLogin = useCallback(
+    async (user: SavedCredentials) => {
+      setIsAuthenticating(user.user_id);
+      setError(null);
+      try {
+        // 1) Try silent refresh if have a refresh token
+        const refreshed = await tryRefresh(user);
+        if (refreshed) {
+          onUserSelect(refreshed);
+          return;
+        }
+        // 2) Otherwise, route to login flow for this user
+        onLoginRequired(user);
+      } catch (e) {
+        console.error('Authentication error:', e);
+        onLoginRequired(user);
+      } finally {
+        setIsAuthenticating(null);
+      }
+    },
+    [onLoginRequired, onUserSelect, tryRefresh]
+  );
 
   if (isLoading) {
     return (
       <div className="max-w-md mx-auto">
         <div className="card">
           <h2>Loading Saved Accounts...</h2>
-          <div className="loading-spinner"></div>
+          <div className="loading-spinner" />
         </div>
       </div>
     );
@@ -113,12 +121,8 @@ export const UserSelector: React.FC<UserSelectorProps> = ({
       <div className="max-w-md mx-auto">
         <div className="card">
           <h2>No Saved Accounts</h2>
-          <p className="text-sm opacity-70 mb-4">
-            No saved accounts found on this device.
-          </p>
-          <button onClick={onCancel} className="button">
-            Continue to Login/Register
-          </button>
+          <p className="text-sm opacity-70 mb-4">No saved accounts found on this device.</p>
+          <button onClick={onCancel} className="button">Continue to Login/Register</button>
         </div>
       </div>
     );
@@ -128,9 +132,11 @@ export const UserSelector: React.FC<UserSelectorProps> = ({
     <div className="max-w-md mx-auto">
       <div className="card">
         <h2>Select Account</h2>
-        <p className="text-sm opacity-70 mb-4">
-          Choose from saved accounts on this device:
-        </p>
+        <p className="text-sm opacity-70 mb-4">Choose from saved accounts on this device:</p>
+
+        {error && (
+          <div className="error-message" style={{ marginBottom: 12 }}>{error}</div>
+        )}
 
         <div className="space-y-3">
           {users.map((user) => (
@@ -143,19 +149,11 @@ export const UserSelector: React.FC<UserSelectorProps> = ({
             >
               <div className="flex justify-between items-center">
                 <div>
-                  <div className="font-medium">
-                    {user.username || `User ${user.user_id.substring(0, 8)}...`}
-                  </div>
-                  <div className="text-sm opacity-70">
-                    ID: {user.user_id.substring(0, 8)}...
-                  </div>
-                  <div className="text-xs opacity-50">
-                    {user.auth_tokens ? '🔐 JWT Auth' : '🔑 Legacy Auth'}
-                  </div>
+                  <div className="font-medium">{user.username || `User ${user.user_id.substring(0, 8)}...`}</div>
+                  <div className="text-sm opacity-70">ID: {user.user_id.substring(0, 8)}...</div>
+                  <div className="text-xs opacity-50">{user.auth_tokens ? '🔐 JWT Auth' : '🔑 Legacy Auth'}</div>
                 </div>
-                <div className="text-sm opacity-70">
-                  {isAuthenticating === user.user_id ? '⏳' : '→'}
-                </div>
+                <div className="text-sm opacity-70">{isAuthenticating === user.user_id ? '⏳' : '→'}</div>
               </div>
             </div>
           ))}
@@ -163,9 +161,7 @@ export const UserSelector: React.FC<UserSelectorProps> = ({
 
         <div className="mt-6 pt-4 border-t border-gray-600">
           <div className="auth-buttons">
-            <button onClick={onCancel} className="button">
-              Use Different Account
-            </button>
+            <button onClick={onCancel} className="button">Use Different Account</button>
           </div>
         </div>
       </div>

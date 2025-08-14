@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { WalletProvider, useWallet } from './contexts/WalletContext';
 import { AuthManager } from './components/AuthManager';
 import UploadDownload from './pages/Dashboard';
 import { Wallet } from './components/Wallet';
@@ -9,11 +10,12 @@ import Links from './components/Links';
 import { DownloadSelectionProvider } from './contexts/DownloadSelectionContext';
 import GlobalUploadProgressBar from './components/GlobalUploadProgressBar';
 
-const HEADER_H = 70;      // right header height
-const SIDEBAR_W = 180;    // sidebar width (match Sidebar)
+const HEADER_H = 80;      // right header height
+const SIDEBAR_W = 200;    // sidebar width (match Sidebar)
 
 const MainContent: React.FC = () => {
   const { isAuthenticated, credentials } = useAuth();
+  const { wallet, loading, error } = useWallet();
   const [page, setPage] = useState('upload-download');
 
   if (!isAuthenticated) {
@@ -44,6 +46,7 @@ const MainContent: React.FC = () => {
           zIndex: 200,
           boxSizing: 'border-box',
           paddingRight: 24,
+          overflow: 'hidden',
         }}
       >
         <div
@@ -55,15 +58,17 @@ const MainContent: React.FC = () => {
             width: '100%',
             padding: '0 24px 0 18px',
             boxSizing: 'border-box',
+            minWidth: 0,
+            overflow: 'hidden',
           }}
         >
-          {/* Left header use logo */}
-          <img src="https://us-west-00-firestarter.pipenetwork.com/publicDownload?hash=257ebacfdac50be1a0075ce46a446149" alt="Firestarter Logo" style={{ height: 32, marginRight: 20 }} />
-          <h1 style={{ margin: 0, fontSize: 18, color: '#e6e6e6', flex: 1 }}>Firestarter</h1>
-          <div className="header-info" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <span className="header-subtitle" style={{ color: '#9aa0a6', fontSize: 13 }}>
-              Firestarter Storage
-            </span>
+          {/* logo/title */}
+          <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+            <img src="https://us-west-00-firestarter.pipenetwork.com/publicDownload?hash=257ebacfdac50be1a0075ce46a446149" alt="Firestarter Logo" style={{ height: 32, marginRight: 16, flexShrink: 0 }} />
+            <h1 style={{ margin: 0, fontSize: 18, color: '#e6e6e6', fontWeight: 600, flexShrink: 0 }}>Firestarter</h1>
+          </div>
+          {/* Info user and wallet */}
+          <div className="header-info" style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0, maxWidth: '60%' }}>
             {credentials?.username && (
               <span
                 className="user-welcome"
@@ -73,17 +78,50 @@ const MainContent: React.FC = () => {
                   borderRadius: 12,
                   padding: '4px 10px',
                   fontSize: 12,
-                  maxWidth: 220,
+                  maxWidth: 160,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   display: 'inline-block',
+                  flexShrink: 1,
                 }}
                 title={`Welcome, ${credentials.username}`}
               >
                 Welcome, {credentials.username}
               </span>
             )}
+            {/* Wallet info header */}
+            <span
+              className="wallet-info"
+              style={{
+                background: '#23272f',
+                color: '#e6e6e6',
+                borderRadius: 12,
+                padding: '4px 12px',
+                fontSize: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                marginLeft: 8,
+                minWidth: 180,
+                maxWidth: 260,
+                textAlign: 'left',
+                overflow: 'hidden',
+                flexShrink: 1,
+              }}
+              title={wallet?.address ? `Wallet: ${wallet.address}` : undefined}
+            >
+              {loading ? (
+                <span>Loading wallet...</span>
+              ) : error ? (
+                <span style={{ color: '#ff6b6b' }}>Wallet error: {error}</span>
+              ) : wallet?.address ? (
+                <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  SOL: {wallet.sol ?? '--'} | PIPE: {wallet.pipe ?? '--'}
+                </span>
+              ) : (
+                <span>No wallet info</span>
+              )}
+            </span>
           </div>
         </div>
       </header>
@@ -113,12 +151,14 @@ function App() {
   }, []);
   return (
     <AuthProvider>
-      <UploadProvider>
-        <GlobalUploadProgressBar />
-        <DownloadSelectionProvider>
-          <MainContent />
-        </DownloadSelectionProvider>
-      </UploadProvider>
+      <WalletProvider>
+        <UploadProvider>
+          <GlobalUploadProgressBar />
+          <DownloadSelectionProvider>
+            <MainContent />
+          </DownloadSelectionProvider>
+        </UploadProvider>
+      </WalletProvider>
     </AuthProvider>
   );
 }

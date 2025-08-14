@@ -1,13 +1,13 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 
 interface SidebarProps {
   active: string;
   onNavigate: (page: string) => void;
-  /** header height is fixed at top (px). sidebar will start below this header. */
+  /** Height in px of fixed header at top. sidebar starts below it. */
   topOffset?: number;
 }
 
-const menu = [
+const MENU: Array<{ id: string; label: string }> = [
   { id: 'upload-download', label: 'Upload/Download' },
   { id: 'wallet', label: 'Wallet' },
   { id: 'links', label: 'Links' },
@@ -15,18 +15,20 @@ const menu = [
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ active, onNavigate, topOffset = 0 }) => {
-  const sidebarTop = `${topOffset}px`;
-  const sidebarHeight = `calc(100vh - ${topOffset}px)`;
+  const sidebarStyle = useMemo(() => ({
+    top: `${topOffset}px`,
+    height: `calc(100vh - ${topOffset}px)`,
+  }), [topOffset]);
 
   return (
     <nav
       className="sidebar"
+      aria-label="Primary"
       style={{
         position: 'fixed',
         left: 0,
-        top: sidebarTop,
-        height: sidebarHeight,
-        width: 170,
+        ...sidebarStyle,
+        width: 180,
         background: '#191b1f',
         color: '#e3e3e3',
         boxSizing: 'border-box',
@@ -38,44 +40,42 @@ export const Sidebar: React.FC<SidebarProps> = ({ active, onNavigate, topOffset 
         padding: 0,
       }}
     >
-      {/* Sidebar menu */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-        <ul style={{ listStyle: 'none', margin: 0, padding: 16, flex: 1 }}>
-          {menu.map((item) => {
-            const isActive = active === item.id;
-            return (
-              <li key={item.id}>
-                <button
-                  onClick={() => onNavigate(item.id)}
-                  style={{
-                    width: '100%',
-                    background: isActive ? '#23272f' : 'transparent',
-                    color: isActive ? '#ffb300' : '#e3e3e3',
-                    border: '1px solid transparent',
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    fontSize: 14,
-                    fontWeight: 500,
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    transition: 'background 120ms, color 120ms',
-                  }}
-                  onMouseOver={(e) => {
-                    if (!isActive) e.currentTarget.style.background = '#20232a';
-                  }}
-                  onMouseOut={(e) => {
-                    if (!isActive) e.currentTarget.style.background = 'transparent';
-                  }}
-                >
-                  {item.label}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+      <ul role="list" style={{ listStyle: 'none', margin: 0, padding: 12, gap: 6, display: 'flex', flexDirection: 'column', flex: 1 }}>
+        {MENU.map((item) => {
+          const isActive = active === item.id;
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                onClick={() => onNavigate(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                style={{
+                  width: '100%',
+                  background: isActive ? '#23272f' : 'transparent',
+                  color: isActive ? '#ffb300' : '#e3e3e3',
+                  border: '1px solid transparent',
+                  textAlign: 'left',
+                  padding: '10px 14px',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  transition: 'background 120ms, color 120ms',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.background = '#20232a';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                {item.label}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
 
-      {/* Footer */}
       <div
         style={{
           padding: '10px 0',

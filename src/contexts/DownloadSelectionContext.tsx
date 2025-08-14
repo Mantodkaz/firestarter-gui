@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState } from 'react';
 
-export interface DownloadSelection {
+interface DownloadSelection {
   remotePath: string;
   fileName?: string;
 }

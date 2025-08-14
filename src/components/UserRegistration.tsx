@@ -50,8 +50,9 @@ export const UserRegistration: React.FC<UserRegistrationProps> = ({ onSuccess, o
     try {
       console.log('Creating new user:', username);
       
-      const response = await invoke<SavedCredentials>('create_new_user', {
+      const response = await invoke<SavedCredentials>('register_user', {
         username: username.trim(),
+        password: '',
       });
 
       console.log('✅ User created successfully');
