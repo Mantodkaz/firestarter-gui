@@ -159,9 +159,44 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
     if (!currentTask) return;
     if (currentTask.status === 'success' && currentTask.id !== lastCompletedId) {
       setLastCompletedId(currentTask.id);
-      onUploadSuccess?.();
+      if (typeof onUploadSuccess === 'function') {
+        onUploadSuccess();
+      }
+      // Langsung fetch upload history dan trigger event
+      if (credentials?.user_id) {
+        setTimeout(() => {
+          invoke('get_upload_history', { userId: credentials.user_id })
+            .then((res) => {
+              // Trigger event manual agar List pasti refresh
+              window.dispatchEvent(
+                new CustomEvent('upload:completed', {
+                  detail: {
+                    id: currentTask.id,
+                    filePath: currentTask.filePath,
+                    name: currentTask.remoteFileName,
+                    total: currentTask.totalSize,
+                    entries: res,
+                  },
+                })
+              );
+            })
+            .catch(() => {
+              // tetap trigger event meski gagal fetch
+              window.dispatchEvent(
+                new CustomEvent('upload:completed', {
+                  detail: {
+                    id: currentTask.id,
+                    filePath: currentTask.filePath,
+                    name: currentTask.remoteFileName,
+                    total: currentTask.totalSize,
+                  },
+                })
+              );
+            });
+        }, 100);
+      }
     }
-  }, [currentTask?.status, currentTask?.id, lastCompletedId, onUploadSuccess]);
+  }, [currentTask?.status, currentTask?.id, lastCompletedId, onUploadSuccess, credentials?.user_id]);
 
   // pick selected tier info
   const selectedTierInfo = useMemo(() => {

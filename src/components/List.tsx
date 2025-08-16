@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useAuth } from '../contexts/AuthContext';
 import { useDownloadSelection } from '../contexts/DownloadSelectionContext';
 
@@ -72,6 +73,8 @@ const shortHash = (hash: string): string => {
   return hash.length <= 16 ? hash : `${hash.slice(0, 8)}...${hash.slice(-4)}`;
 };
 
+const keyOf = (e: UploadLogEntry) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`;
+
 // ----- component -------------------------------------------------------------
 export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
   const { credentials } = useAuth();
@@ -86,6 +89,10 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
   const [highlightedKeys, setHighlightedKeys] = useState<string[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // ref for storing current entries snapshot (used in listener)
+  const entriesRef = useRef<UploadLogEntry[]>([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+
   // fetch history
   useEffect(() => {
     if (!credentials?.user_id) return;
@@ -99,17 +106,14 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
         if (!alive) return;
         const newEntries = Array.isArray(res) ? res : [];
 
-        // highlight newly added rows
-        if (entries.length > 0 && newEntries.length > entries.length) {
-          const oldKeys = new Set(entries.map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`));
-          const diff = newEntries
-            .map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`)
-            .filter((k) => !oldKeys.has(k));
-          if (diff.length) {
-            setHighlightedKeys(diff);
-            setTimeout(() => setHighlightedKeys([]), 1500);
-          }
+        // highlight new rows compared to old snapshot
+        const oldKeys = new Set(entriesRef.current.map(keyOf));
+        const diff = newEntries.map(keyOf).filter((k) => !oldKeys.has(k));
+        if (diff.length) {
+          setHighlightedKeys(diff);
+          setTimeout(() => setHighlightedKeys([]), 1500);
         }
+
         setEntries(newEntries);
       })
       .catch((e) => {
@@ -118,42 +122,41 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
       })
       .finally(() => alive && setLoading(false));
 
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credentials?.user_id, refreshKey]);
 
+  // upload_history_updated -> fetch & update
   useEffect(() => {
     if (!credentials?.user_id) return;
 
-    const handler = () => {
-      invoke<UploadLogEntry[]>('get_upload_history', { userId: credentials.user_id })
-        .then((res) => {
+    let unlisten: undefined | (() => void);
+    (async () => {
+      unlisten = await listen('upload_history_updated', async (e) => {
+        const p: any = e.payload || {};
+        if (p.user_id && p.user_id !== credentials.user_id) return;
+
+        try {
+          const res = await invoke<UploadLogEntry[]>('get_upload_history', { userId: credentials.user_id });
           const newEntries = Array.isArray(res) ? res : [];
 
-          // highlight baris baru (pakai snapshot entries saat ini)
-          if (entries.length > 0 && newEntries.length > entries.length) {
-            const oldKeys = new Set(entries.map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`));
-            const diff = newEntries
-              .map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`)
-              .filter((k) => !oldKeys.has(k));
-            if (diff.length) {
-              setHighlightedKeys(diff);
-              setTimeout(() => setHighlightedKeys([]), 1500);
-            }
+          // highlight new rows compared to old snapshot
+          const oldKeys = new Set(entriesRef.current.map(keyOf));
+          const diff = newEntries.map(keyOf).filter((k) => !oldKeys.has(k));
+          if (diff.length) {
+            setHighlightedKeys(diff);
+            setTimeout(() => setHighlightedKeys([]), 1500);
           }
 
           setEntries(newEntries);
-        })
-        .catch(() => {
+        } catch {
           // no-op
-        });
-    };
+        }
+      });
+    })();
 
-    window.addEventListener('upload:completed', handler);
-    return () => window.removeEventListener('upload:completed', handler);
-  }, [credentials?.user_id, entries]);
+    return () => { try { unlisten && unlisten(); } catch {} };
+  }, [credentials?.user_id]);
 
   const filteredEntries = useMemo(() => {
     const q = search.trim().toLowerCase();

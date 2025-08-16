@@ -561,7 +561,9 @@ pub async fn upload_file(
     use tokio_util::io::ReaderStream;
 
     // Load credentials & config
-    let credentials_opt = load_credentials(app_handle.clone()).await.map_err(|e| format!("No credentials found: {}", e))?;
+    let credentials_opt = load_credentials(app_handle.clone())
+        .await
+        .map_err(|e| format!("No credentials found: {}", e))?;
     let mut credentials = credentials_opt.ok_or("No saved credentials found")?;
     let api_config = ApiConfig::default();
     let client = Client::new();
@@ -587,21 +589,35 @@ pub async fn upload_file(
 
     // Remote name
     let file_name = if let Some(ref custom) = remote_file_name {
-        if !custom.trim().is_empty() { custom.as_str() } else { path.file_name().and_then(|n| n.to_str()).ok_or("Invalid file name")? }
+        if !custom.trim().is_empty() {
+            custom.as_str()
+        } else {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .ok_or("Invalid file name")?
+        }
     } else {
-        path.file_name().and_then(|n| n.to_str()).ok_or("Invalid file name")?
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid file name")?
     };
 
     let encoded_name = utf8_percent_encode(file_name, QUERY_ENCODE_SET);
     let upload_url = format!("{}{}", api_config.api_base_url, api_config.upload);
 
     let mut params = vec![format!("file_name={}", encoded_name)];
-    if let Some(t) = &tier { params.push(format!("tier={}", utf8_percent_encode(t, QUERY_ENCODE_SET))); }
-    if let Some(e) = epochs { params.push(format!("epochs={}", e)); }
+    if let Some(t) = &tier {
+        params.push(format!("tier={}", utf8_percent_encode(t, QUERY_ENCODE_SET)));
+    }
+    if let Some(e) = epochs {
+        params.push(format!("epochs={}", e));
+    }
     let full_url = format!("{}?{}", upload_url, params.join("&"));
 
     // Open file for streaming
-    let file = tokio::fs::File::open(&file_path).await.map_err(|e| format!("Failed to open file: {}", e))?;
+    let file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|e| format!("Failed to open file: {}", e))?;
     let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
     let uploaded: u64 = 0;
@@ -615,21 +631,31 @@ pub async fn upload_file(
     let id_clone = id.clone();
 
     let stream = ReaderStream::new(file).inspect_ok(move |chunk| {
-        if let Ok(mut h) = hasher_clone.lock() { h.update(&chunk); }
+        if let Ok(mut h) = hasher_clone.lock() {
+            h.update(&chunk);
+        }
         if let Ok(mut up) = uploaded_clone.lock() {
             *up += chunk.len() as u64;
-            let percent = if file_size > 0 { ((*up as f64 / file_size as f64) * 100.0).min(100.0) } else { 0.0 };
-            let _ = app_handle_clone.emit("upload_progress", serde_json::json!({
-                "id": id_clone,
-                "percent": percent as u32,
-                "uploaded": *up,
-                "total": file_size
-            }));
+            let percent = if file_size > 0 {
+                ((*up as f64 / file_size as f64) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            let _ = app_handle_clone.emit(
+                "upload_progress",
+                serde_json::json!({
+                    "id": id_clone,
+                    "percent": percent as u32,
+                    "uploaded": *up,
+                    "total": file_size
+                }),
+            );
         }
     });
 
     // Build request: always use X-User-Id and X-User-App-Key, never JWT
-    let request = client.post(&full_url)
+    let request = client
+        .post(&full_url)
         .header("X-User-Id", &credentials.user_id)
         .header("X-User-App-Key", &credentials.user_app_key);
 
@@ -652,18 +678,43 @@ pub async fn upload_file(
         file_size,
         timestamp: Utc::now().to_rfc3339(),
     };
+
     let _ = append_upload_log(&credentials.user_id, &entry, &app_handle);
 
     if status.is_success() {
-        let _ = app_handle.emit("upload_progress", serde_json::json!({
-            "id": id,
-            "percent": 100,
-            "uploaded": file_size,
-            "total": file_size
-        }));
+        // Emit progress final (100%)
+        let _ = app_handle.emit(
+            "upload_progress",
+            serde_json::json!({
+                "id": id,
+                "percent": 100,
+                "uploaded": file_size,
+                "total": file_size
+            }),
+        );
+
+        app_handle
+            .emit(
+                "upload_history_updated",
+                serde_json::json!({
+                    "user_id": credentials.user_id,
+                    "local_path": entry.local_path,
+                    "remote_path": entry.remote_path,
+                    "status": entry.status,
+                    "message": entry.message,
+                    "blake3_hash": entry.blake3_hash,
+                    "file_size": entry.file_size,
+                    "timestamp": entry.timestamp,
+                }),
+            )
+            .ok();
+
         Ok(format!("File '{}' uploaded successfully", file_name))
     } else {
-        Err(format!("Upload failed - Status: {}, Response: {}", status, response_text))
+        Err(format!(
+            "Upload failed - Status: {}, Response: {}",
+            status, response_text
+        ))
     }
 }
 
