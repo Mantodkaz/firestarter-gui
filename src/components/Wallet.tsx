@@ -1,10 +1,28 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWallet } from '../contexts/WalletContext';
 import { invoke } from '@tauri-apps/api/core';
 import { ep } from '../shared/api/endpoints';
 
-type UsageBreakdown = { gb_transferred: number; tokens_spent: number; tokens_burned: number };
+type TierDetail = {
+  tier_name: string;
+  transfer_count: number;
+  gb_transferred: number;
+  base_cost: number;
+  final_cost: number;
+  avg_multiplier: number;
+  tokens_burned: number;
+  tokens_to_treasury: number;
+};
+
+type UsageBreakdown = {
+  gb_transferred: number;
+  tokens_spent: number;
+  tokens_burned: number;
+  tokens_to_treasury?: number;
+  transfer_count?: number;
+  tier_details?: Record<string, TierDetail>;
+};
 type Usage = {
   period: string;
   user_id: string;
@@ -56,6 +74,14 @@ function Wallet() {
     },
     [credentials]
   );
+
+  // Fetch usage automatically on mount
+  useEffect(() => {
+    if (credentials?.user_id && credentials?.user_app_key) {
+      handleTokenUsage(usagePeriod);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credentials?.user_id, credentials?.user_app_key]);
 
   // Swap SOL to PIPE
   const handleSwap = useCallback(async () => {
@@ -125,6 +151,8 @@ function Wallet() {
         flexWrap: 'nowrap',
         position: 'relative',
         minHeight: 420,
+        boxSizing: 'border-box',
+        paddingRight: 24,
       }}
     >
       {/* Overlay spinner for global loading (not for actions) */}
@@ -364,7 +392,7 @@ function Wallet() {
       </div>
 
       {/* Right: Token Usage */}
-      <div style={{ flex: 1, minWidth: 320, wordBreak: 'break-all', paddingLeft: 8 }}>
+  <div style={{ flex: 1, minWidth: 320, wordBreak: 'break-all', paddingLeft: 8, boxSizing: 'border-box', overflow: 'visible' }}>
         <h3 style={{ marginBottom: 8 }}>Token Usage</h3>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           {PERIODS.map((p) => (
@@ -380,48 +408,47 @@ function Wallet() {
           ))}
         </div>
         {usage && usage.breakdown && (
-          <div style={{ width: '100%' }}>
-            <div style={{ width: '100%' }}>
-              <table
-                style={{
-                  width: '100%',
-                  background: '#181818',
-                  color: '#fff',
-                  borderCollapse: 'collapse',
-                  fontSize: 13,
-                  marginBottom: 8,
-                  tableLayout: 'fixed',
-                }}
-              >
-                <thead>
-                  <tr style={{ background: '#222' }}>
-                    <th style={{ width: '28%', padding: '6px 8px', border: '1px solid #333', textAlign: 'left', whiteSpace: 'normal' }}>Type</th>
-                    <th style={{ width: '24%', padding: '6px 4px', border: '1px solid #333', textAlign: 'right', whiteSpace: 'normal' }}>GB</th>
-                    <th style={{ width: '24%', padding: '6px 4px', border: '1px solid #333', textAlign: 'right', whiteSpace: 'normal' }}>Spent</th>
-                    <th style={{ width: '24%', padding: '6px 4px', border: '1px solid #333', textAlign: 'right', whiteSpace: 'normal' }}>Burned</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(['bandwidth', 'storage', 'total'] as const).map((key) => {
-                    const breakdown = usage?.breakdown?.[key];
-                    if (!breakdown) return null;
-                    return (
-                      <tr key={key} style={{ background: key === 'total' ? '#232323' : undefined, fontWeight: key === 'total' ? 600 : 400 }}>
-                        <td style={{ padding: '6px 8px', border: '1px solid #333', textTransform: 'capitalize' }}>{key}</td>
-                        <td style={{ padding: '6px 8px', border: '1px solid #333', textAlign: 'right' }}>
-                          {Number(breakdown.gb_transferred).toLocaleString(undefined, { maximumFractionDigits: 3 })}
-                        </td>
-                        <td style={{ padding: '6px 8px', border: '1px solid #333', textAlign: 'right' }}>
-                          {Number(breakdown.tokens_spent).toLocaleString(undefined, { maximumFractionDigits: 3 })}
-                        </td>
-                        <td style={{ padding: '6px 8px', border: '1px solid #333', textAlign: 'right' }}>
-                          {Number(breakdown.tokens_burned).toLocaleString(undefined, { maximumFractionDigits: 3 })}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          <div style={{ width: '100%', color: '#e3e3e3', fontSize: 14, background: 'none', marginBottom: 8 }}>
+            {/* Storage Analysis */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, color: '#7fd7ff', marginBottom: 4 }}>📦 Storage Analysis</div>
+              <div style={{ marginBottom: 2 }}>Total Volume: <b>{Number(usage.breakdown.storage?.gb_transferred ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} GB</b></div>
+              <div style={{ marginBottom: 2 }}>Total Cost: <b>{Number(usage.breakdown.storage?.tokens_spent ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} PIPE</b></div>
+              <div style={{ marginBottom: 2 }}>Total Uploads: <b>{usage.breakdown.storage?.transfer_count ?? 0}</b></div>
+              {usage.breakdown.storage?.tier_details && (
+                <div style={{ marginTop: 8, marginBottom: 2, fontWeight: 600 }}>By Tier:</div>
+              )}
+              {usage.breakdown.storage?.tier_details && (
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {Object.values(usage.breakdown.storage.tier_details).map((tier: any) => (
+                    <li key={tier.tier_name} style={{ marginBottom: 2 }}>
+                      <span style={{ fontWeight: 600 }}>{tier.tier_name}</span>
+                      <span style={{ color: '#aaa' }}> ({tier.avg_multiplier}x): </span>
+                      <span>{Number(tier.gb_transferred).toLocaleString(undefined, { maximumFractionDigits: 2 })} GB</span>
+                      <span style={{ color: '#aaa' }}> = </span>
+                      <span>{Number(tier.tokens_burned).toLocaleString(undefined, { maximumFractionDigits: 4 })} PIPE</span>
+                      <span style={{ color: '#aaa' }}> ({tier.transfer_count} uploads)</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <hr style={{ border: 'none', borderTop: '2px dashed #2a3b4d', margin: '18px 0 12px 0' }} />
+            </div>
+            {/* Bandwidth Analysis */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, color: '#7fd7ff', marginBottom: 4 }}>🌐 Bandwidth Analysis</div>
+              <div style={{ marginBottom: 2 }}>Total Volume: <b>{Number(usage.breakdown.bandwidth?.gb_transferred ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} GB</b></div>
+              <div style={{ marginBottom: 2 }}>Total Cost: <b>{Number(usage.breakdown.bandwidth?.tokens_spent ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} PIPE</b></div>
+              <div style={{ marginBottom: 2 }}>Total Downloads: <b>{usage.breakdown.bandwidth?.transfer_count ?? 0}</b></div>
+              <hr style={{ border: 'none', borderTop: '2px dashed #2a3b4d', margin: '18px 0 12px 0' }} />
+            </div>
+            {/* Token Distribution */}
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, color: '#7fd7ff', marginBottom: 4 }}>💰 Token Distribution</div>
+              <div style={{ marginBottom: 2 }}>Total Spent: <b>{Number(usage.breakdown.total?.tokens_spent ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} PIPE</b></div>
+              <div style={{ marginBottom: 2 }}>Burned: <b>{Number(usage.breakdown.total?.tokens_burned ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} PIPE</b> ({usage.breakdown.total?.tokens_spent ? ((Number(usage.breakdown.total.tokens_burned) / Number(usage.breakdown.total.tokens_spent)) * 100).toFixed(1) : '0'}%)</div>
+              <div style={{ marginBottom: 2 }}>Treasury: <b>{Number(usage.breakdown.total?.tokens_to_treasury ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })} PIPE</b> ({usage.breakdown.total?.tokens_spent ? ((Number(usage.breakdown.total.tokens_to_treasury) / Number(usage.breakdown.total.tokens_spent)) * 100).toFixed(1) : '0'}%)</div>
+              <hr style={{ border: 'none', borderTop: '2px dashed #2a3b4d', margin: '18px 0 12px 0' }} />
             </div>
             <div style={{ fontSize: 12, color: '#aaa', marginBottom: 2 }}>
               Period: <b>{usage.period}</b> &nbsp;|&nbsp; User ID: <span style={{ fontFamily: 'monospace' }}>{usage.user_id}</span>

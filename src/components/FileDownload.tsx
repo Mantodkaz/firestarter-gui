@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useDownloadSelection } from '../contexts/DownloadSelectionContext';
 
 function FileDownload() {
-  const { getValidAccessToken } = useAuth();
+  const { credentials } = useAuth();
   const { selection, setSelection } = useDownloadSelection();
 
   const [fileName, setFileName] = useState('');
@@ -84,16 +84,15 @@ function FileDownload() {
     }
 
     setIsDownloading(true);
-  setMessage('');
-  setIsError(false);
-  setDownloadPercent(0);
-  setDownloaded(0);
-  setTotal(0);
+    setMessage('');
+    setIsError(false);
+    setDownloadPercent(0);
+    setDownloaded(0);
+    setTotal(0);
 
     try {
-      const token = await getValidAccessToken();
-      if (!token) {
-        setMessage('Session expired or JWT invalid. Please login again.');
+      if (!credentials?.user_id || !credentials?.user_app_key) {
+        setMessage('Not logged in or missing credentials');
         setIsError(true);
         return;
       }
@@ -101,7 +100,8 @@ function FileDownload() {
       const result = await invoke<string>('download_file', {
         fileName: name,
         outputPath: downloadPath,
-        token,
+        user_id: credentials.user_id,
+        user_app_key: credentials.user_app_key,
       });
 
       setMessage(result || 'Download completed');

@@ -268,7 +268,7 @@ pub async fn get_token_usage(period: String, credentials: Option<SavedCredential
     let user_id = credentials.as_ref().ok_or("user_id parameter is required")?.user_id.clone();
     let api_config = ApiConfig::default();
     let url = format!(
-        "{}{}?user_id={}&period={}&detailed=false",
+        "{}{}?user_id={}&period={}&detailed=true",
         api_config.api_base_url,
         api_config.token_usage,
         user_id,
@@ -628,15 +628,10 @@ pub async fn upload_file(
         }
     });
 
-    // Build request
-    let mut request = client.post(&full_url);
-    if let Some(ref auth_tokens) = credentials.auth_tokens {
-        request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-    } else {
-        request = request
-            .header("X-User-Id", &credentials.user_id)
-            .header("X-User-App-Key", &credentials.user_app_key);
-    }
+    // Build request: always use X-User-Id and X-User-App-Key, never JWT
+    let request = client.post(&full_url)
+        .header("X-User-Id", &credentials.user_id)
+        .header("X-User-App-Key", &credentials.user_app_key);
 
     let response = request
         .body(reqwest::Body::wrap_stream(stream))
@@ -696,14 +691,9 @@ pub async fn download_file(
 
     println!("📥 Downloading {} from {}", file_name, download_url);
 
-    let mut request = client.get(&full_url);
-    if let Some(ref auth_tokens) = credentials.auth_tokens {
-        request = request.header("Authorization", format!("Bearer {}", auth_tokens.access_token));
-    } else {
-        request = request
-            .header("X-User-Id", &credentials.user_id)
-            .header("X-User-App-Key", &credentials.user_app_key);
-    }
+    let request = client.get(&full_url)
+        .header("X-User-Id", &credentials.user_id)
+        .header("X-User-App-Key", &credentials.user_app_key);
 
     let response = request.send().await.map_err(|e| format!("Download request failed: {}", e))?;
     let _status = response.status();

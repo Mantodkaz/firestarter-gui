@@ -42,7 +42,7 @@ type TierInfo = {
   chunk_size_mb?: number;
 };
 
-function FileUpload({ onUploadSuccess }: FileUploadProps) {
+export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
   const { credentials } = useAuth();
   const { tasks, startUpload, cancelUpload } = useUpload();
   const { wallet, loading: walletLoading } = useWallet();
@@ -60,8 +60,9 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
 
   // Wallet validation state
   const [walletValidationError, setWalletValidationError] = useState('');
+  const [lastCompletedId, setLastCompletedId] = useState<string | null>(null);
 
-  // Fetch tier pricing info via Tauri backend
+  // Fetch tier pricing info 
   useEffect(() => {
     setLoadingTier(true);
     setErrorTier('');
@@ -77,12 +78,23 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
       });
   }, []);
 
-  // Get most recent task
-  const currentTask = useMemo(
-    () => (tasks.length ? tasks[tasks.length - 1] : null),
-    [tasks]
-  );
+  // choose current task
+  const currentTask = useMemo(() => {
+    if (!tasks.length) return null;
+    const rIdx = [...tasks].reverse().findIndex((t) => t.status === 'uploading');
+    return rIdx === -1 ? tasks[tasks.length - 1] : tasks[tasks.length - 1 - rIdx];
+  }, [tasks]);
+
   const isUploading = currentTask?.status === 'uploading';
+
+  // Progress 
+  const pct = useMemo(() => {
+    const raw = Number(currentTask?.progress ?? 0);
+    if (!Number.isFinite(raw)) return 0;
+    if (raw < 0) return 0;
+    if (raw > 100) return 100;
+    return raw;
+  }, [currentTask?.progress]);
 
   const handleChooseFile = async () => {
     try {
@@ -107,7 +119,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
         setFileSizeBytes(0);
       }
     } catch {
-
+      // ignore
     }
   };
 
@@ -124,21 +136,32 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
   const handleUpload = () => {
     if (!filePath || !credentials?.user_id) return;
     if (walletValidationError) return;
+
     const fileNameForServer = getFileNameForServer();
     const ep = Number(epochs);
     if (!Number.isFinite(ep) || ep < 1) return;
 
+    // clear fields when upload starts
     startUpload(filePath, fileNameForServer, selectedTier, String(ep));
-    setFilePath(null);
-    setRemoteFileName('');
-    setFileSizeBytes(0);
   };
 
-  // onUploadSuccess only when latest task truly succeeded
+  // Clear fields after task is final (success/error/cancelled) for consistent UX
   useEffect(() => {
-    if (currentTask?.status === 'success') onUploadSuccess?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!currentTask) return;
+    if (['success', 'error', 'cancelled'].includes(currentTask.status)) {
+      setFilePath(null);
+      setRemoteFileName('');
+      setFileSizeBytes(0);
+    }
   }, [currentTask?.status]);
+
+  useEffect(() => {
+    if (!currentTask) return;
+    if (currentTask.status === 'success' && currentTask.id !== lastCompletedId) {
+      setLastCompletedId(currentTask.id);
+      onUploadSuccess?.();
+    }
+  }, [currentTask?.status, currentTask?.id, lastCompletedId, onUploadSuccess]);
 
   // pick selected tier info
   const selectedTierInfo = useMemo(() => {
@@ -151,7 +174,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
   }, [epochs]);
 
   // compute estimated cost
-  const INCLUDE_EPOCHS_IN_ESTIMATE = false; // disable epochs
+  const INCLUDE_EPOCHS_IN_ESTIMATE = false; // disable epochs 
   const estimatedCost = useMemo(() => {
     if (!selectedTierInfo || !fileSizeBytes) return 0;
     const price = Number(selectedTierInfo.current_price);
@@ -161,7 +184,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
     return gb * price * multiplier;
   }, [selectedTierInfo, fileSizeBytes, epochsNum]);
 
-  // Validate wallet before upload (must be after estimatedCost)
+
   useEffect(() => {
     if (!filePath || !wallet || walletLoading) {
       setWalletValidationError('');
@@ -169,8 +192,8 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
     }
 
     const MIN_SOL = 0.01;
-    // PIPE needed = estimatedCost
-    const pipeNeeded = estimatedCost;
+    const pipeNeeded = estimatedCost; // PIPE cost
+
     if (wallet.sol < MIN_SOL) {
       setWalletValidationError('Insufficient SOL balance');
     } else if (wallet.pipe < pipeNeeded) {
@@ -288,7 +311,6 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
                 <div>Chunk MB: <b>{selectedTierInfo.chunk_size_mb} MB</b></div>
               )}
 
-              {/* test */}
               <div
                 style={{
                   marginTop: 8,
@@ -299,15 +321,14 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
                 }}
               >
                 <div style={{ color: '#9aa0a6' }}>
-                  Size x Price{INCLUDE_EPOCHS_IN_ESTIMATE ? ' x Epochs' : ''}
+                  Size x Price
                 </div>
                 <div style={{ fontSize: 12 }}>
                   {hasSelection ? (
                     <>
-                    <b>{toGB(fileSizeBytes).toFixed(4)} GB</b> x <b>{Number(selectedTierInfo.current_price)}</b>
-                    {INCLUDE_EPOCHS_IN_ESTIMATE && <> x <b>{epochsNum}</b></>}
+                      <b>{toGB(fileSizeBytes).toFixed(4)} GB</b> x <b>{Number(selectedTierInfo.current_price)}</b>
                     </>
-                    ) : (
+                  ) : (
                     <i>Select a file to calculate</i>
                   )}
                 </div>
@@ -352,6 +373,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
           {walletValidationError}
         </div>
       )}
+
       <button
         className="button"
         style={{ width: '100%', background: '#ff6600', color: '#fff', fontWeight: 600, fontSize: 18, marginBottom: 12 }}
@@ -375,7 +397,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
             }}
           >
             <span style={{ fontSize: 18, fontWeight: 700 }}>
-              {Number.isFinite(currentTask.progress) ? `${currentTask.progress.toFixed(0)}%` : ''}
+              {Number.isFinite(pct) ? `${pct.toFixed(0)}%` : ''}
             </span>
             <span>
               {Number.isFinite(currentTask.uploadedSize) && Number.isFinite(currentTask.totalSize)
@@ -406,7 +428,7 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
           >
             <div
               style={{
-                width: Number.isFinite(currentTask.progress) ? `${currentTask.progress}%` : '0%',
+                width: Number.isFinite(pct) ? `${pct}%` : '0%',
                 height: '100%',
                 background: 'linear-gradient(90deg, #ff6600 60%, #ffb300 100%)',
                 transition: 'width 0.3s cubic-bezier(.4,2,.6,1)',
@@ -428,5 +450,3 @@ function FileUpload({ onUploadSuccess }: FileUploadProps) {
     </div>
   );
 }
-
-export default FileUpload;

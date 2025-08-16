@@ -124,6 +124,37 @@ export function List({ maxHeight, refreshKey, onRemoteFileClick }: ListProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credentials?.user_id, refreshKey]);
 
+  useEffect(() => {
+    if (!credentials?.user_id) return;
+
+    const handler = () => {
+      invoke<UploadLogEntry[]>('get_upload_history', { userId: credentials.user_id })
+        .then((res) => {
+          const newEntries = Array.isArray(res) ? res : [];
+
+          // highlight baris baru (pakai snapshot entries saat ini)
+          if (entries.length > 0 && newEntries.length > entries.length) {
+            const oldKeys = new Set(entries.map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`));
+            const diff = newEntries
+              .map((e) => `${e.blake3_hash || ''}-${timeKey(e.timestamp)}`)
+              .filter((k) => !oldKeys.has(k));
+            if (diff.length) {
+              setHighlightedKeys(diff);
+              setTimeout(() => setHighlightedKeys([]), 1500);
+            }
+          }
+
+          setEntries(newEntries);
+        })
+        .catch(() => {
+          // no-op
+        });
+    };
+
+    window.addEventListener('upload:completed', handler);
+    return () => window.removeEventListener('upload:completed', handler);
+  }, [credentials?.user_id, entries]);
+
   const filteredEntries = useMemo(() => {
     const q = search.trim().toLowerCase();
     let arr = entries;
