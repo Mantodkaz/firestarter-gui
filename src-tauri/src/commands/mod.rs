@@ -630,7 +630,7 @@ pub async fn upload_file(
     let uploaded_clone = uploaded_arc.clone();
     let id_clone = id.clone();
 
-    let stream = ReaderStream::new(file).inspect_ok(move |chunk| {
+    let stream = ReaderStream::with_capacity(file, 1024 * 1024).inspect_ok(move |chunk| {
         if let Ok(mut h) = hasher_clone.lock() {
             h.update(&chunk);
         }

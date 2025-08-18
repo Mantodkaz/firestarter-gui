@@ -1,95 +1,133 @@
 import React, { useMemo } from 'react';
 import { useUpload } from '../contexts/UploadContext';
 
-const BAR_HEIGHT = 8;
+const clamp = (n: number, min = 0, max = 100) => Math.min(Math.max(n, min), max);
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const k = 1024;
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
+const formatBytes = (bytes?: number) => {
+  if (!Number.isFinite(bytes as number) || !bytes || bytes <= 0) return '0 B';
+  const u = ['KB', 'MB', 'GB', 'TB', 'PB'];
   let v = bytes;
-  while (v >= k && i < units.length - 1) {
-    v /= k;
-    i++;
-  }
-  return `${v.toFixed(v < 10 ? 2 : 1)} ${units[i]}`;
-}
+  let i = -1;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return i === -1 ? `${bytes} B` : `${v.toFixed(v < 10 ? 2 : 1)} ${u[i]}`;
+};
 
-const GlobalUploadProgressBar: React.FC = () => {
+const formatSpeed = (bps?: number) => {
+  if (!bps || !Number.isFinite(bps) || bps <= 0) return '';
+  const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+  if (bps >= GB) return `${(bps / GB).toFixed(2)} GB/s`;
+  if (bps >= MB) return `${(bps / MB).toFixed(1)} MB/s`;
+  if (bps >= KB) return `${(bps / KB).toFixed(0)} KB/s`;
+  return `${bps.toFixed(0)} B/s`;
+};
+
+const formatEta = (sec?: number | null) => {
+  if (sec == null || !Number.isFinite(sec)) return 'estimating…';
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) return `${h}h ${m}m ${ss}s`;
+  if (m > 0) return `${m}m ${ss}s`;
+  return `${ss}s`;
+};
+
+export default function GlobalUploadProgressBar() {
   const { tasks } = useUpload();
 
-  const { activeCount, total, uploaded, percent } = useMemo(() => {
-    const active = tasks.filter((t) => t.status === 'uploading');
-    const totalBytes = active.reduce((acc, t) => acc + (t.totalSize || 0), 0);
-    const uploadedBytes = active.reduce((acc, t) => acc + (t.uploadedSize || 0), 0);
-    const pct = totalBytes > 0 ? Math.min(100, Math.max(0, Math.floor((uploadedBytes / totalBytes) * 100))) : 0;
-    return { activeCount: active.length, total: totalBytes, uploaded: uploadedBytes, percent: pct };
+  const data = useMemo(() => {
+    const uploading = tasks.filter(t => t.status === 'uploading');
+    if (uploading.length === 0) {
+      return {
+        active: 0,
+        totalBytes: 0,
+        uploadedBytes: 0,
+        percent: 0,
+        totalBps: 0,
+        etaSec: null as number | null,
+      };
+    }
+
+    const totalBytes = uploading.reduce((a, t) => a + (t.totalSize || 0), 0);
+    const uploadedBytes = uploading.reduce((a, t) => a + (t.uploadedSize || 0), 0);
+    const totalBps = uploading.reduce((a, t) => a + (t.speedBps || 0), 0);
+    const percent = totalBytes > 0 ? clamp((uploadedBytes / totalBytes) * 100) : 0;
+    const remain = Math.max(0, totalBytes - uploadedBytes);
+    const etaSec =
+      totalBps > 0 && totalBytes > 0
+        ? remain / totalBps
+        : null;
+
+    return {
+      active: uploading.length,
+      totalBytes,
+      uploadedBytes,
+      percent,
+      totalBps,
+      etaSec,
+    };
   }, [tasks]);
 
-  if (activeCount === 0) return null;
+  if (data.active === 0) return null;
 
   return (
     <div
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      aria-label="Global upload progress"
       style={{
         position: 'fixed',
         top: 0,
         left: 0,
         right: 0,
-        zIndex: 9999,
-        background: 'rgba(24,24,24,0.96)',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-        height: BAR_HEIGHT + 18,
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 16px',
-        pointerEvents: 'none',
+        zIndex: 1000,
+        background: 'rgba(20,20,20,0.95)',
+        borderBottom: '1px solid #2a2a2a',
+        backdropFilter: 'blur(4px)',
       }}
     >
-      <div style={{ flex: 1 }}>
+      {/* Bar */}
+      <div style={{ height: 8, width: '100%', background: '#1f2937' }}>
         <div
           style={{
-            width: '100%',
-            height: BAR_HEIGHT,
-            background: '#222',
-            borderRadius: 6,
-            overflow: 'hidden',
+            height: '100%',
+            width: `${data.percent}%`,
+            transition: 'width 160ms linear',
+            background:
+              'linear-gradient(90deg, #60a5fa 0%, #22d3ee 50%, #34d399 100%)',
           }}
-        >
-          <div
-            style={{
-              width: `${percent}%`,
-              height: '100%',
-              background: 'linear-gradient(90deg, #ff6600 60%, #ffb300 100%)',
-              transition: 'width 200ms cubic-bezier(.4,2,.6,1)',
-              willChange: 'width',
-            }}
-          />
-        </div>
+        />
       </div>
 
+      {/* Info line */}
       <div
         style={{
-          color: '#fff',
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          padding: '6px 10px',
+          color: '#e5e7eb',
           fontSize: 12,
-          marginLeft: 12,
-          minWidth: 160,
-          textAlign: 'right',
-          lineHeight: 1.2,
-          fontFamily: 'Inter, system-ui, sans-serif',
-          whiteSpace: 'nowrap',
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial',
         }}
       >
-        <div style={{ opacity: 0.9 }}>{percent}%</div>
-        <div style={{ opacity: 0.7 }}>{formatBytes(uploaded)} / {formatBytes(total)}{activeCount > 1 ? ` • ${activeCount} uploads` : ''}</div>
+        <strong style={{ color: '#93c5fd' }}>
+          {data.percent.toFixed(1)}%
+        </strong>
+
+        <span style={{ opacity: 0.9 }}>
+          {formatBytes(data.uploadedBytes)} / {formatBytes(data.totalBytes)}
+        </span>
+
+        {/* Speed + ETA */}
+        <span style={{ opacity: 0.9 }}>
+          {formatSpeed(data.totalBps)}
+          {data.totalBps > 0 ? ' • ' : ' '}
+          ETA {formatEta(data.etaSec)}
+        </span>
+
+        {/* Active uploads count */}
+        <span style={{ marginLeft: 'auto', opacity: 0.9 }}>
+          {data.active} uploading
+        </span>
       </div>
     </div>
   );
-};
-
-export default GlobalUploadProgressBar;
+}

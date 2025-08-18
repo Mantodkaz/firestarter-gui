@@ -14,6 +14,28 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
+// speed
+const formatSpeed = (bps?: number) => {
+  if (!bps || !Number.isFinite(bps) || bps <= 0) return '';
+  const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+  if (bps >= GB) return `${(bps / GB).toFixed(2)} GB/s`;
+  if (bps >= MB) return `${(bps / MB).toFixed(1)} MB/s`;
+  if (bps >= KB) return `${(bps / KB).toFixed(0)} KB/s`;
+  return `${bps.toFixed(0)} B/s`;
+};
+
+const formatEta = (sec?: number | null) => {
+  if (sec == null || !Number.isFinite(sec)) return 'estimating…';
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) return `${h}h ${m}m ${ss}s`;
+  if (m > 0) return `${m}m ${ss}s`;
+  return `${ss}s`;
+};
+
+
 function toGB(bytes: number): number {
   return bytes / (1024 ** 3);
 }
@@ -95,6 +117,10 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
     if (raw > 100) return 100;
     return raw;
   }, [currentTask?.progress]);
+  
+  // Speed and ETA
+  const speedStr = useMemo(() => formatSpeed(currentTask?.speedBps), [currentTask?.speedBps]);
+  const etaStr   = useMemo(() => formatEta(currentTask?.etaSec),   [currentTask?.etaSec]);
 
   const handleChooseFile = async () => {
     try {
@@ -439,14 +465,23 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
                 ? `${formatBytes(currentTask.uploadedSize)} / ${formatBytes(currentTask.totalSize)}`
                 : ''}
             </span>
+            
+            {currentTask.status === 'uploading' && (speedStr || etaStr) && (
+              <span style={{ marginTop: 2, color: '#9aa0a6', fontSize: 13 }}>
+                {speedStr ? `${speedStr}` : ''}{speedStr && etaStr ? ' • ' : ''}ETA {etaStr}
+                </span>
+              )}
+
             {currentTask.status === 'success' && (
               <span style={{ color: '#4caf50' }}>✅ Upload successful!</span>
             )}
+
             {currentTask.status === 'error' && (
               <span style={{ color: '#ff4d4f' }}>
                 Upload failed: {currentTask.error || currentTask.message}
               </span>
             )}
+
             {currentTask.status === 'cancelled' && (
               <span style={{ color: '#ffb300' }}>Upload cancelled</span>
             )}

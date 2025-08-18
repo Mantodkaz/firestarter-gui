@@ -18,6 +18,8 @@ interface UploadTask {
   progress: number;      // 0-100
   uploadedSize: number;  // cumulative bytes
   totalSize: number;     // total file bytes
+  speedBps?: number;     // EMA bytes/sec
+  etaSec?: number;       // window seconds
   message?: string;
   error?: string;
 }
@@ -61,7 +63,7 @@ function clampPercent(p: number): number {
   return p < 0 ? 0 : p > 100 ? 100 : p;
 }
 
-// Prefer ratio of uploaded/total for accuracy; fallback to provided percent
+// Prefer ratio of uploaded/total; fallback to provided percent
 function normalizePercent(p?: number, uploaded?: number, total?: number): number | undefined {
   if (typeof uploaded === 'number' && typeof total === 'number' && total > 0) {
     return clampPercent((uploaded / total) * 100);
@@ -72,12 +74,29 @@ function normalizePercent(p?: number, uploaded?: number, total?: number): number
   return undefined;
 }
 
+type RuntimeRef = {
+  cancelled: boolean;
+  accBytes: number;
+  lastSeenBytes: number;
+  lastTs: number;            // ms 
+  emaBps: number | null;
+  ring: Array<{ t: number; b: number }>; // 10s (t=sec, b=uploaded cum)
+  warmSamples: number;
+};
+
+const WINDOW_SEC = 10;           // rolling window for ETA
+const MIN_DT = 0.08;             // minimal 80ms for stability
+const WARM_MIN_SAMPLES = 3;      // requires >=3 samples
+const WARM_MIN_BYTES = 1 * 1024 * 1024; // minimal 1MB sent before ETA shows
+const FREEZE_REMAIN = 2 * 1024 * 1024;  // freeze ETA <1s when nearly done
+const EMA_ALPHA = 0.1;           // 10% new sample
+
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [tasks, setTasks] = useState<UploadTask[]>([]);
   const { credentials } = useAuth();
 
-  // Per-task runtime refs: cancel flag + byte accumulator
-  const refs = useRef<Record<string, { cancelled: boolean; accBytes: number; lastSeenBytes: number }>>({});
+  // Per-task runtime refs
+  const refs = useRef<Record<string, RuntimeRef>>({});
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   const resetTasks = useCallback(() => {
@@ -118,6 +137,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           const { id, percent, uploaded, total, completed, status, message, error } = payload;
 
+          // target task
           const pos = id
             ? prev.findIndex((t) => t.id === id)
             : (() => {
@@ -129,15 +149,21 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const cur = prev[pos];
           let r = refs.current[cur.id];
           if (r?.cancelled) return prev;
-          if (!r) r = refs.current[cur.id] = { cancelled: false, accBytes: 0, lastSeenBytes: 0 };
-
-          // total size (prefer backend value)
-          let totalBytes = cur.totalSize;
-          if (typeof total === 'number' && total > 0) {
-            totalBytes = total;
+          if (!r) {
+            r = refs.current[cur.id] = {
+              cancelled: false,
+              accBytes: 0,
+              lastSeenBytes: 0,
+              lastTs: performance.now(),
+              emaBps: null,
+              ring: [],
+              warmSamples: 0,
+            };
           }
 
-          // Accumulate bytes: detect per-part reset
+          // total size
+          let totalBytes = cur.totalSize;
+          if (typeof total === 'number' && total > 0) totalBytes = total;
           let cumUploaded = cur.uploadedSize;
           if (typeof uploaded === 'number' && uploaded >= 0) {
             if (uploaded < r.lastSeenBytes) {
@@ -146,14 +172,57 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else {
               r.lastSeenBytes = uploaded;
             }
-            const now = r.accBytes + r.lastSeenBytes;
-            cumUploaded = Math.max(cur.uploadedSize, now);
+            const nowBytes = r.accBytes + r.lastSeenBytes;
+            cumUploaded = Math.max(cur.uploadedSize, nowBytes);
           }
 
-          // Compute view percent
-          const viewPercent = normalizePercent(percent, cumUploaded, totalBytes);
+          const nowTs = performance.now();
+          const dt = Math.max(MIN_DT, (nowTs - r.lastTs) / 1000);
+          const prevCum = cur.uploadedSize;
+          const effDelta = Math.max(0, cumUploaded - prevCum);
+          r.warmSamples += 1;
 
-          // DONE only if backend flags completion OR bytes cover total
+          const instBps = effDelta / dt;
+          r.emaBps = r.emaBps == null ? instBps : (r.emaBps * (1 - EMA_ALPHA) + instBps * EMA_ALPHA);
+          r.lastTs = nowTs;
+
+          const tSec = nowTs / 1000;
+          r.ring.push({ t: tSec, b: cumUploaded });
+          const cutoff = tSec - WINDOW_SEC;
+          while (r.ring.length && r.ring[0].t < cutoff) r.ring.shift();
+
+          let avgBps: number | null = null;
+          if (r.ring.length >= 2) {
+            const first = r.ring[0], last = r.ring[r.ring.length - 1];
+            const dT = Math.max(0.5, last.t - first.t);
+            const dB = Math.max(0, last.b - first.b);
+            avgBps = dB / dT;
+          }
+
+          // window average > EMA > null
+          const estimator =
+            (avgBps && isFinite(avgBps) && avgBps > 0 ? avgBps :
+             (r.emaBps && isFinite(r.emaBps) && r.emaBps > 0 ? r.emaBps : null));
+
+          const warmedUp = (r.warmSamples >= WARM_MIN_SAMPLES) && (cumUploaded >= WARM_MIN_BYTES);
+
+          // clamp estimator
+          let etaSec: number | undefined;
+          let speedBps: number | undefined = r.emaBps ?? undefined;
+
+          if (warmedUp && estimator && totalBytes > 0) {
+            const s = Math.min(Math.max(estimator, 1024 /*1KB/s*/), 10 * 1024 * 1024 * 1024 /*10GB/s*/);
+            const remain = Math.max(0, totalBytes - cumUploaded);
+            etaSec = remain / s;
+
+            // freeze near-finish
+            const pct = totalBytes > 0 ? (cumUploaded / totalBytes) : 0;
+            if (remain < FREEZE_REMAIN || pct >= 0.995) {
+              etaSec = 1;
+            }
+          }
+
+          const viewPercent = normalizePercent(percent, cumUploaded, totalBytes);
           const isCompletedFlag = completed === true || status === 'completed';
           const doneByBytes = totalBytes > 0 && cumUploaded >= totalBytes;
 
@@ -162,12 +231,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             progress: typeof viewPercent === 'number' ? viewPercent : cur.progress,
             uploadedSize: Number.isFinite(cumUploaded) ? cumUploaded : cur.uploadedSize,
             totalSize: Number.isFinite(totalBytes) ? totalBytes : cur.totalSize,
+            speedBps: Number.isFinite(speedBps as number) ? speedBps : cur.speedBps,
+            etaSec: typeof etaSec === 'number' && isFinite(etaSec) ? etaSec : cur.etaSec,
             message: message ?? cur.message,
             error: error ?? cur.error,
             status: error ? 'error' : (isCompletedFlag || doneByBytes) ? 'success' : cur.status,
           };
 
-          // >>> Trigger event
           if (nextTask.status === 'success' && cur.status !== 'success') {
             try {
               window.dispatchEvent(
@@ -193,11 +263,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     })();
 
     return () => {
+      let u = unlistenRef.current;
+      unlistenRef.current = null;
+      if (u) u();
       mounted = false;
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
     };
   }, []);
 
@@ -209,7 +278,15 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...prev,
         { id, filePath, remoteFileName, status: 'uploading', progress: 0, uploadedSize: 0, totalSize: 0 },
       ]);
-      refs.current[id] = { cancelled: false, accBytes: 0, lastSeenBytes: 0 };
+      refs.current[id] = {
+        cancelled: false,
+        accBytes: 0,
+        lastSeenBytes: 0,
+        lastTs: performance.now(),
+        emaBps: null,
+        ring: [],
+        warmSamples: 0,
+      };
 
       try {
         if (!credentials?.user_id || !credentials?.user_app_key) {
@@ -226,7 +303,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           tier,
           epochs: epochs ? Number(epochs) : undefined,
         });
-        // wait for final progress event (completed or bytes==total)
+
       } catch (err: any) {
         setTasks((prev) =>
           prev.map((t) => (t.id === id ? { ...t, status: 'error', error: String(err || 'Upload failed') } : t))
