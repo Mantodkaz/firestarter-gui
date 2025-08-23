@@ -19,8 +19,7 @@ const Links: React.FC = () => {
 
   // Data State
   const [links, setLinks] = useState<PublicLinkEntry[]>([]);
-
-  // UI State
+  
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -33,12 +32,13 @@ const Links: React.FC = () => {
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
 
-  // copy notification
-  const [copiedMsg, setCopiedMsg] = useState<string | null>(null);
 
-  // ===== Derived =====
+  const [copiedMsg, setCopiedMsg] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<'created_at_desc' | 'created_at_asc'>('created_at_desc');
+
   const userId = credentials?.user_id;
 
+  // Filter
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return links;
@@ -50,14 +50,25 @@ const Links: React.FC = () => {
     );
   }, [links, search]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
+  // Sort
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      const tA = new Date(a.created_at).getTime();
+      const tB = new Date(b.created_at).getTime();
+      return sortBy === 'created_at_desc' ? tB - tA : tA - tB;
+    });
+    return arr;
+  }, [filtered, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / rowsPerPage));
   const paginated = useMemo(
-    () => filtered.slice((page - 1) * rowsPerPage, page * rowsPerPage),
-    [filtered, page, rowsPerPage]
+    () => sorted.slice((page - 1) * rowsPerPage, page * rowsPerPage),
+    [sorted, page, rowsPerPage]
   );
 
-  // Reset to first page when filters change
-  useEffect(() => { setPage(1); }, [search, rowsPerPage]);
+  // Reset to first page when filters or sort change
+  useEffect(() => { setPage(1); }, [search, rowsPerPage, sortBy]);
 
   // ===== Actions =====
   const fetchLinks = useCallback(async () => {
@@ -208,6 +219,13 @@ const Links: React.FC = () => {
                 <option value={100}>100</option>
               </select>
               entries
+            </span>
+            <span style={{ marginLeft: 8 }}>
+              Sort by:
+              <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} style={{ margin: '0 8px', padding: '4px 8px', borderRadius: 4 }}>
+                <option value="created_at_desc">Newest</option>
+                <option value="created_at_asc">Oldest</option>
+              </select>
             </span>
           </div>
 
